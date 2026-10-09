@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>☕️</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Quicksand:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background-color: #EAD8C3; /* Latte */
+            color: #4A3022; /* Espresso */
+            font-family: 'Quicksand', sans-serif;
+            margin: 0;
+            padding: 0;
+            overflow-x: hidden;
+        }
+        h1, h2, h3, h4, h5, .font-serif {
+            font-family: 'DM Serif Display', serif;
+        }
+        .retro-shadow {
+            box-shadow: 4px 4px 0px 0px #4A3022;
+        }
+        .retro-shadow-sm {
+            box-shadow: 2px 2px 0px 0px #4A3022;
+        }
+        
+        /* Custom Scrollbar for the table */
+        .custom-scrollbar::-webkit-scrollbar {
+            height: 8px;
+            width: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #F5EBE1; /* Crema */
+            border-radius: 4px;
+            border: 1px solid #4A3022;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background-color: #4A3022;
+            border-radius: 4px;
+        }
+
+        /* Hide number input arrows */
+        input[type=number]::-webkit-inner-spin-button, 
+        input[type=number]::-webkit-outer-spin-button { 
+            -webkit-appearance: none; 
+            margin: 0; 
+        }
+    </style>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        latte: '#EAD8C3',
+                        espresso: '#4A3022',
+                        crema: '#F5EBE1',
+                        matcha: '#8A9A5B',
+                        terracotta: '#CC7A6B'
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="module" data-type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-habit-tracker';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        
+        let app, db, auth;
+        if (firebaseConfig) {
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+        }
+
+        window.firebaseDependencies = { app, db, auth, doc, setDoc, deleteDoc, onSnapshot, collection, query, signInAnonymously, signInWithCustomToken, onAuthStateChanged, appId };
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useCallback } = React;
+
+        // Utility: Get days in a month
+        const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
+        
+        // Utility: Format date to YYYY-MM-DD
+        const formatDate = (year, month, day) => {
+            return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        };
+
+        const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+        function App() {
+            const [user, setUser] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            
+            // App Data
+            const [habits, setHabits] = useState([]);
+            const [logs, setLogs] = useState({}); // Keyed by `${habitId}_${date}`
+            const [goals, setGoals] = useState({}); // Keyed by `${habitId}_${yearMonth}`
+
+            // UI State
+            const [activeTab, setActiveTab] = useState('monthly');
+            const [currentDate, setCurrentDate] = useState(new Date());
+
+            const { auth, db, doc, setDoc, deleteDoc, onSnapshot, collection, query, signInAnonymously, signInWithCustomToken, onAuthStateChanged, appId } = window.firebaseDependencies || {};
+
+            // Auth Effect
+            useEffect(() => {
+                if (!auth) {
+                    setError("Firebase not configured.");
+                    setLoading(false);
+                    return;
+                }
+
+                const initAuth = async () => {
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (err) {
+                        console.error("Auth Error:", err);
+                        setError(err.message);
+                    }
+                };
+
+                initAuth();
+
+                const unsubscribe = onAuthStateChanged(auth, (u) => {
+                    setUser(u);
+                    setLoading(false);
+                });
+
+                return () => unsubscribe();
+            }, []);
+
+            // Data Fetching Effect
+            useEffect(() => {
+                if (!user || !db) return;
+
+                const userId = user.uid;
+                
+                // Fetch Habits
+                const habitsRef = collection(db, 'artifacts', appId, 'users', userId, 'habits');
+                const unsubHabits = onSnapshot(query(habitsRef), (snapshot) => {
+                    const loadedHabits = [];
+                    snapshot.forEach(doc => {
+                        loadedHabits.push({ id: doc.id, ...doc.data() });
+                    });
+                    setHabits(loadedHabits.sort((a, b) => a.createdAt - b.createdAt));
+                }, (err) => console.error("Habits fetch error:", err));
+
+                // Fetch Logs (Simple query as per rules, process in memory)
+                const logsRef = collection(db, 'artifacts', appId, 'users', userId, 'habit_logs');
+                const unsubLogs = onSnapshot(query(logsRef), (snapshot) => {
+                    const loadedLogs = {};
+                    snapshot.forEach(doc => {
+                        const data = doc.data();
+                        loadedLogs[`${data.habitId}_${data.date}`] = data.status;
+                    });
+                    setLogs(loadedLogs);
+                }, (err) => console.error("Logs fetch error:", err));
+
+                // Fetch Goals
+                const goalsRef = collection(db, 'artifacts', appId, 'users', userId, 'habit_goals');
+                const unsubGoals = onSnapshot(query(goalsRef), (snapshot) => {
+                    const loadedGoals = {};
+                    snapshot.forEach(doc => {
+                        const data = doc.data();
+                        loadedGoals[`${data.habitId}_${data.yearMonth}`] = data.goal;
+                    });
+                    setGoals(loadedGoals);
+                }, (err) => console.error("Goals fetch error:", err));
+
+                return () => {
+                    unsubHabits();
+                    unsubLogs();
+                    unsubGoals();
+                };
+            }, [user, db, appId]);
+
+            const addHabit = async (name, category = 'Anytime') => {
+                if (!name.trim() || !user || !db) return;
+                const habitId = `habit_${Date.now()}`;
+                const habitRef = doc(db, 'artifacts', appId, 'users', user.uid, 'habits', habitId);
+                await setDoc(habitRef, {
+                    name: name.trim(),
+                    category: category,
+                    createdAt: Date.now()
+                });
+            };
+
+            const deleteHabit = async (habitId) => {
+                if(!user || !db) return; 
+                const habitRef = doc(db, 'artifacts', appId, 'users', user.uid, 'habits', habitId);
+                await deleteDoc(habitRef);
+            }
+
+            const toggleLog = async (habitId, date) => {
+                if (!user || !db) return;
+                const currentStatus = logs[`${habitId}_${date}`];
+                let nextStatus;
+                
+                if (!currentStatus) nextStatus = 'completed';
+                else if (currentStatus === 'completed') nextStatus = 'missed';
+                else nextStatus = null; // Remove
+
+                const logDocId = `${habitId}_${date}`;
+                const logRef = doc(db, 'artifacts', appId, 'users', user.uid, 'habit_logs', logDocId);
+
+                if (nextStatus) {
+                    await setDoc(logRef, { habitId, date, status: nextStatus });
+                } else {
+                    await deleteDoc(logRef);
+                }
+            };
+
+            const updateGoal = async (habitId, yearMonth, goalValue) => {
+                if (!user || !db) return;
+                const goalDocId = `${habitId}_${yearMonth}`;
+                const goalRef = doc(db, 'artifacts', appId, 'users', user.uid, 'habit_goals', goalDocId);
+                
+                if (goalValue > 0) {
+                    await setDoc(goalRef, { habitId, yearMonth, goal: parseInt(goalValue, 10) });
+                } else {
+                    await deleteDoc(goalRef);
+                }
+            };
+
+            if (loading) return <div className="min-h-screen flex items-center justify-center font-serif text-3xl text-espresso animate-pulse">Brewing your habits...</div>;
+            if (error) return <div className="p-8 text-terracotta font-bold border-2 border-terracotta bg-crema retro-shadow m-8 rounded-xl">Error: {error}</div>;
+
+            return (
+                <div className="min-h-screen pb-20 selection:bg-matcha selection:text-crema">
+                    <header className="pt-12 pb-8 px-6 text-center">
+                        <h1 className="text-5xl md:text-7xl font-serif tracking-widest uppercase mb-4 retro-shadow-sm inline-block px-4 py-2 bg-crema border-[3px] border-espresso rounded-2xl transform -rotate-2">
+                            Xy-Habits
+                        </h1>
+                        <div className="flex justify-center items-center space-x-8 mt-6 font-serif uppercase tracking-widest text-lg md:text-xl font-bold">
+                            <span>Daily</span>
+                            <span className="w-2 h-2 rounded-full bg-espresso"></span>
+                            <span>Present</span>
+                        </div>
+                    </header>
+
+                    <nav className="flex justify-center mb-10 px-4">
+                        <div className="flex bg-crema border-[3px] border-espresso rounded-full p-1 retro-shadow-sm w-full max-w-sm">
+                            <button 
+                                onClick={() => setActiveTab('monthly')}
+                                className={`flex-1 py-2 px-4 rounded-full font-bold transition-all ${activeTab === 'monthly' ? 'bg-espresso text-crema' : 'text-espresso hover:bg-latte'}`}
+                            >
+                                Monthly Grid
+                            </button>
+                            <button 
+                                onClick={() => setActiveTab('yearly')}
+                                className={`flex-1 py-2 px-4 rounded-full font-bold transition-all ${activeTab === 'yearly' ? 'bg-espresso text-crema' : 'text-espresso hover:bg-latte'}`}
+                            >
+                                Yearly Goals
+                            </button>
+                        </div>
+                    </nav>
+
+                    <main className="max-w-6xl mx-auto px-4 sm:px-6">
+                        {activeTab === 'monthly' ? (
+                            <MonthlyView 
+                                habits={habits} 
+                                logs={logs} 
+                                currentDate={currentDate} 
+                                setCurrentDate={setCurrentDate} 
+                                addHabit={addHabit}
+                                deleteHabit={deleteHabit}
+                                toggleLog={toggleLog}
+                            />
+                        ) : (
+                            <YearlyView 
+                                habits={habits}
+                                logs={logs}
+                                goals={goals}
+                                currentDate={currentDate}
+                                setCurrentDate={setCurrentDate}
+                                updateGoal={updateGoal}
+                                toggleLog={toggleLog}
+                            />
+                        )}
+                    </main>
+                </div>
+            );
+        }
+
+        function MonthlyView({ habits, logs, currentDate, setCurrentDate, addHabit, deleteHabit, toggleLog }) {
+            const [newHabit, setNewHabit] = useState('');
+            const [newCategory, setNewCategory] = useState('Morning');
+            
+            const year = currentDate.getFullYear();
+            const month = currentDate.getMonth();
+            const daysInMonth = getDaysInMonth(year, month);
+            
+            const daysArray = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+            const CATEGORIES = ['Morning', 'Afternoon', 'Evening', 'Anytime'];
+
+            const handlePrevMonth = () => setCurrentDate(new Date(year, month - 1, 1));
+            const handleNextMonth = () => setCurrentDate(new Date(year, month + 1, 1));
+
+            const handleAdd = (e) => {
+                e.preventDefault();
+                addHabit(newHabit, newCategory);
+                setNewHabit('');
+            };
+
+            const groupedHabits = CATEGORIES.reduce((acc, cat) => {
+                acc[cat] = habits.filter(h => h.category === cat || (!h.category && cat === 'Anytime'));
+                return acc;
+            }, {});
+
+            return (
+                <div className="bg-crema border-[3px] border-espresso rounded-3xl retro-shadow p-4 md:p-8">
+                    {/* Month Controls */}
+                    <div className="flex flex-col xl:flex-row justify-between items-center mb-8 gap-4">
+                        <div className="flex items-center gap-4 bg-latte border-[3px] border-espresso rounded-full p-2 retro-shadow-sm w-full xl:w-auto justify-between xl:justify-start">
+                            <button onClick={handlePrevMonth} className="w-10 h-10 flex items-center justify-center bg-espresso text-crema rounded-full hover:bg-matcha transition-colors">
+                                &larr;
+                            </button>
+                            <h2 className="font-serif text-2xl uppercase min-w-[160px] text-center">
+                                {MONTH_NAMES[month]} {year}
+                            </h2>
+                            <button onClick={handleNextMonth} className="w-10 h-10 flex items-center justify-center bg-espresso text-crema rounded-full hover:bg-matcha transition-colors">
+                                &rarr;
+                            </button>
+                        </div>
+
+                        <form onSubmit={handleAdd} className="flex flex-col sm:flex-row w-full xl:w-auto gap-2 sm:gap-0">
+                            <select 
+                                value={newCategory} 
+                                onChange={(e) => setNewCategory(e.target.value)}
+                                className="bg-latte border-[3px] sm:border-r-0 border-espresso sm:rounded-l-full sm:rounded-r-none rounded-full py-2 px-4 focus:outline-none focus:bg-white font-bold h-full"
+                            >
+                                {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                            </select>
+                            <input 
+                                type="text" 
+                                value={newHabit}
+                                onChange={(e) => setNewHabit(e.target.value)}
+                                placeholder="Add a new habit..."
+                                className="flex-1 sm:w-64 bg-latte border-[3px] sm:border-r-0 border-espresso sm:rounded-none rounded-full py-2 px-4 focus:outline-none focus:bg-white placeholder-espresso/60 font-bold"
+                            />
+                            <button type="submit" className="bg-espresso text-crema border-[3px] border-espresso sm:rounded-r-full sm:rounded-l-none rounded-full py-2 px-6 font-bold hover:bg-matcha transition-colors h-full">
+                                ADD
+                            </button>
+                        </form>
+                    </div>
+
+                    {/* Legend */}
+                    <div className="flex items-center justify-center sm:justify-end gap-6 mb-4 text-sm font-bold">
+                        <div className="flex items-center gap-2"><div className="w-4 h-4 rounded-full bg-latte border-2 border-espresso"></div> None</div>
+                        <div className="flex items-center gap-2"><div className="w-4 h-4 rounded-full bg-matcha border-2 border-espresso"></div> Done</div>
+                        <div className="flex items-center gap-2"><div className="w-4 h-4 rounded-full bg-terracotta border-2 border-espresso"></div> Missed</div>
+                    </div>
+
+                    {/* Table Container */}
+                    <div className="overflow-x-auto custom-scrollbar bg-latte border-[3px] border-espresso rounded-2xl">
+                        <table className="w-full text-left border-collapse">
+                            <thead>
+                                <tr>
+                                    <th className="p-4 border-b-[3px] border-r-[3px] border-espresso bg-crema sticky left-0 z-10 w-48 font-serif uppercase tracking-wider">Habit</th>
+                                    {daysArray.map(day => (
+                                        <th key={day} className="p-2 border-b-[3px] border-espresso text-center min-w-[40px] font-bold">
+                                            {day}
+                                        </th>
+                                    ))}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {habits.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={daysInMonth + 1} className="p-8 text-center text-espresso/60 font-bold text-lg">
+                                            No habits tracking yet. Add one above!
+                                        </td>
+                                    </tr>
+                                ) : (
+                                    CATEGORIES.map(category => {
+                                        const catHabits = groupedHabits[category];
+                                        if (!catHabits || catHabits.length === 0) return null;
+
+                                        return (
+                                            <React.Fragment key={category}>
+                                                <tr>
+                                                    <th className="bg-espresso text-crema font-serif px-4 py-2 uppercase tracking-widest sticky left-0 z-20 border-b-[3px] border-r-[3px] border-espresso text-left">
+                                                        {category}
+                                                    </th>
+                                                    <td colSpan={daysInMonth} className="bg-espresso border-b-[3px] border-espresso"></td>
+                                                </tr>
+                                                {catHabits.map(habit => (
+                                                    <tr key={habit.id} className="hover:bg-crema/50 transition-colors">
+                                                        <td className="p-4 border-b-[3px] border-r-[3px] border-espresso bg-latte sticky left-0 z-10 flex justify-between items-center group min-w-[200px]">
+                                                            <span className="font-bold truncate pr-2">{habit.name}</span>
+                                                            <button onClick={() => deleteHabit(habit.id)} className="text-terracotta opacity-100 sm:opacity-0 group-hover:opacity-100 hover:scale-125 font-bold transition-all text-2xl px-2" aria-label="Delete habit">&times;</button>
+                                                        </td>
+                                                        {daysArray.map(day => {
+                                                            const dateStr = formatDate(year, month, day);
+                                                            const status = logs[`${habit.id}_${dateStr}`];
+                                                            
+                                                            let bgColor = 'bg-crema hover:bg-latte';
+                                                            if (status === 'completed') bgColor = 'bg-matcha';
+                                                            if (status === 'missed') bgColor = 'bg-terracotta';
+
+                                                            return (
+                                                                <td key={day} className="p-1 border-b-[3px] border-espresso text-center min-w-[40px]">
+                                                                    <button 
+                                                                        onClick={() => toggleLog(habit.id, dateStr)}
+                                                                        className={`w-8 h-8 rounded-full border-2 border-espresso transition-all transform hover:scale-110 mx-auto block retro-shadow-sm ${bgColor}`}
+                                                                        aria-label={`Toggle habit ${habit.name} for ${dateStr}`}
+                                                                    />
+                                                                </td>
+                                                            );
+                                                        })}
+                                                    </tr>
+                                                ))}
+                                            </React.Fragment>
+                                        );
+                                    })
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        }
+
+        function YearlyView({ habits, logs, goals, currentDate, setCurrentDate, updateGoal, toggleLog }) {
+            const [selectedHabitId, setSelectedHabitId] = useState(habits.length > 0 ? habits[0].id : null);
+            
+            useEffect(() => {
+                if (!selectedHabitId && habits.length > 0) {
+                    setSelectedHabitId(habits[0].id);
+                }
+            }, [habits, selectedHabitId]);
+
+            const year = currentDate.getFullYear();
+            
+            const handlePrevYear = () => setCurrentDate(new Date(year - 1, 0, 1));
+            const handleNextYear = () => setCurrentDate(new Date(year + 1, 0, 1));
+
+            if (habits.length === 0) {
+                return (
+                    <div className="bg-crema border-[3px] border-espresso rounded-3xl retro-shadow p-12 text-center">
+                        <p className="font-serif text-2xl uppercase">Please add a habit in the Monthly view first!</p>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="bg-crema border-[3px] border-espresso rounded-3xl retro-shadow p-4 md:p-8">
+                    {/* Controls Header */}
+                    <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-6">
+                        
+                        {/* Year Selector */}
+                        <div className="flex items-center gap-4 bg-latte border-[3px] border-espresso rounded-full p-2 retro-shadow-sm">
+                            <button onClick={handlePrevYear} className="w-10 h-10 flex items-center justify-center bg-espresso text-crema rounded-full hover:bg-matcha transition-colors">
+                                &larr;
+                            </button>
+                            <h2 className="font-serif text-3xl uppercase min-w-[120px] text-center">
+                                {year}
+                            </h2>
+                            <button onClick={handleNextYear} className="w-10 h-10 flex items-center justify-center bg-espresso text-crema rounded-full hover:bg-matcha transition-colors">
+                                &rarr;
+                            </button>
+                        </div>
+
+                        {/* Habit Selector */}
+                        <div className="w-full md:w-auto flex-1 max-w-md">
+                            <label className="block text-sm font-bold uppercase tracking-wider mb-2 pl-2">Tracking Habit:</label>
+                            <select 
+                                value={selectedHabitId || ''} 
+                                onChange={(e) => setSelectedHabitId(e.target.value)}
+                                className="w-full bg-latte border-[3px] border-espresso rounded-full py-3 px-6 font-bold text-lg focus:outline-none focus:ring-4 ring-matcha/50 appearance-none cursor-pointer retro-shadow-sm"
+                            >
+                                {['Morning', 'Afternoon', 'Evening', 'Anytime'].map(cat => {
+                                    const catHabits = habits.filter(h => h.category === cat || (!h.category && cat === 'Anytime'));
+                                    if(catHabits.length === 0) return null;
+                                    return (
+                                        <optgroup key={cat} label={cat}>
+                                            {catHabits.map(h => (
+                                                <option key={h.id} value={h.id}>{h.name}</option>
+                                            ))}
+                                        </optgroup>
+                                    );
+                                })}
+                            </select>
+                        </div>
+                    </div>
+
+                    {/* Months Grid */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                        {MONTH_NAMES.map((monthName, monthIndex) => {
+                            const daysInMonth = getDaysInMonth(year, monthIndex);
+                            const yearMonthStr = `${year}-${String(monthIndex + 1).padStart(2, '0')}`;
+                            
+                            // Calculate Stats
+                            let completed = 0;
+                            const daysRender = [];
+                            
+                            for (let d = 1; d <= daysInMonth; d++) {
+                                const dateStr = formatDate(year, monthIndex, d);
+                                const status = logs[`${selectedHabitId}_${dateStr}`];
+                                if (status === 'completed') completed++;
+                                daysRender.push({ date: dateStr, status });
+                            }
+
+                            const currentGoal = goals[`${selectedHabitId}_${yearMonthStr}`] || '';
+                            const isGoalMet = currentGoal && completed >= currentGoal;
+
+                            return (
+                                <div key={monthName} className={`bg-latte border-[3px] border-espresso rounded-2xl p-4 retro-shadow-sm flex flex-col transition-all ${isGoalMet ? 'ring-4 ring-matcha' : ''}`}>
+                                    <div className="flex justify-between items-end mb-4 border-b-2 border-espresso/20 pb-2">
+                                        <h3 className="font-serif text-2xl uppercase">{monthName}</h3>
+                                        <div className="text-right">
+                                            <span className="text-2xl font-bold">{completed}</span>
+                                            <span className="text-sm font-bold opacity-60">/{daysInMonth}</span>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="flex items-center justify-between mb-4 bg-crema p-2 rounded-xl border-2 border-espresso">
+                                        <label className="text-sm font-bold uppercase px-2">Goal:</label>
+                                        <input 
+                                            type="number" 
+                                            min="0" 
+                                            max={daysInMonth}
+                                            value={currentGoal}
+                                            onChange={(e) => updateGoal(selectedHabitId, yearMonthStr, e.target.value)}
+                                            placeholder="-"
+                                            className="w-16 bg-transparent border-b-2 border-espresso text-center font-bold focus:outline-none focus:border-matcha"
+                                        />
+                                    </div>
+
+                                    {/* Stacked Day Circles using Flexbox */}
+                                    <div className="flex flex-wrap gap-1 mt-auto">
+                                        {daysRender.map(({ date, status }, idx) => {
+                                            let bgColor = 'bg-crema hover:bg-latte';
+                                            if (status === 'completed') bgColor = 'bg-matcha';
+                                            if (status === 'missed') bgColor = 'bg-terracotta';
+                                            
+                                            return (
+                                                <button
+                                                    key={idx}
+                                                    onClick={() => toggleLog(selectedHabitId, date)}
+                                                    className={`w-[18%] aspect-square rounded-full border border-espresso transition-colors ${bgColor}`}
+                                                    title={`${date}: ${status || 'none'}`}
+                                                />
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
